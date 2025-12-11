@@ -1,7 +1,19 @@
-# Configuration settings for the text scanner application
+import os
+import sys
 
-# Path to the Tesseract executable
-TESSERACT_CMD = r'C:\Program Files\Tesseract-OCR\tesseract.exe'  # Update this path as necessary
+# Tesseract OCR configuration
+TESSERACT_CMD = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+
+# Add Tesseract to PATH if not already there
+if r'C:\Program Files\Tesseract-OCR' not in os.environ.get('PATH', ''):
+    os.environ['PATH'] += os.pathsep + r'C:\Program Files\Tesseract-OCR'
+
+# Verify Tesseract is installed
+if not os.path.exists(TESSERACT_CMD):
+    print(f"Warning: Tesseract not found at {TESSERACT_CMD}")
+    print("Please install Tesseract OCR from: https://github.com/UB-Mannheim/tesseract/wiki")
+
+# Configuration settings for the text scanner application
 
 # Default image size for OCR processing
 DEFAULT_IMAGE_SIZE = (800, 600)
