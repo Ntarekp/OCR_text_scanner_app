@@ -58,6 +58,7 @@ class TextScannerApp(QMainWindow):
         self.roi = None
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._update_camera_frame)
+        self.camera_active = False
         self.initUI()
 
     def initUI(self):
@@ -262,53 +263,105 @@ class TextScannerApp(QMainWindow):
 
     def start_camera(self, cam_index=0):
         """Start live camera capture"""
+        self.textEdit.setText("🔄 Attempting to open camera...")
+        QApplication.processEvents()  # Update UI immediately
+        
         try:
-            if self.capture is None:
-                # Try multiple camera indices if default fails
-                for idx in [0, 1, -1]:
-                    self.capture = cv2.VideoCapture(idx)
-                    if self.capture.isOpened():
+            # Clean up any existing capture
+            if self.capture is not None:
+                self.capture.release()
+                self.capture = None
+            
+            # Try multiple camera indices
+            success = False
+            tried_indices = []
+            
+            for idx in [1, 2, -1]:
+                tried_indices.append(idx)
+                self.textEdit.setText(f"🔄 Trying camera index {idx}...")
+                QApplication.processEvents()
+                
+                cap = cv2.VideoCapture(idx)
+                
+                if cap.isOpened():
+                    # Test if we can actually read a frame
+                    ret, test_frame = cap.read()
+                    if ret and test_frame is not None:
+                        self.capture = cap
+                        cam_index = idx
+                        success = True
+                        self.textEdit.setText(f"✓ Camera opened successfully at index {cam_index}!")
                         break
-                    self.capture = None
-
-            if self.capture is None or not self.capture.isOpened():
-                self.textEdit.setText("Error: Cannot open camera. Try a different device.")
+                    else:
+                        cap.release()
+                else:
+                    cap.release()
+            
+            if not success:
+                self.textEdit.setText(
+                    f"❌ Error: Cannot open camera.\n"
+                    f"Tried indices: {tried_indices}\n\n"
+                    f"Troubleshooting:\n"
+                    f"1. Check if camera is being used by another app\n"
+                    f"2. Check camera permissions\n"
+                    f"3. Try unplugging/replugging camera\n"
+                    f"4. Restart the application"
+                )
                 return
 
-            # Set camera properties
+            # Configure camera settings
             self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
             self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
             self.capture.set(cv2.CAP_PROP_FPS, 30)
+            self.capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
+            # Update UI state
+            self.camera_active = True
             self.startCamButton.setEnabled(False)
             self.stopCamButton.setEnabled(True)
-            self.timer.start(30)  # Update every 30ms (~33 FPS)
-            self.textEdit.setText("✓ Camera started. Press 'Run OCR' to scan current frame.")
             
+            # Start timer for frame updates
+            self.timer.start(30)  # ~33 fps
+
+            self.textEdit.setText(
+                f"✓ Camera started successfully on index {cam_index}\n\n"
+                f"Camera is now live!\n"
+                f"Press 'Run OCR' to scan the current frame."
+            )
+
         except Exception as e:
-            self.textEdit.setText(f"Camera error: {str(e)}")
+            self.textEdit.setText(f"❌ Camera error: {str(e)}\n\nPlease check your camera connection.")
             self.stop_camera()
 
     def _update_camera_frame(self):
         """Update frame from camera"""
-        if self.capture is None:
+        if not self.camera_active or self.capture is None:
             return
-            
-        ret, frame = self.capture.read()
-        if not ret:
-            self.textEdit.setText("Error: Cannot read from camera.")
+
+        if not self.capture.isOpened():
+            self.textEdit.setText("❌ Camera connection lost")
             self.stop_camera()
             return
-            
+
+        ret, frame = self.capture.read()
+
+        if not ret or frame is None:
+            # Don't immediately stop - might be a temporary glitch
+            return
+
+        # Store and display frame
         self.cv_frame = frame
         self._show_frame(frame)
 
     def stop_camera(self):
         """Stop camera capture"""
+        self.camera_active = False
         self.timer.stop()
-        if self.capture:
+        
+        if self.capture is not None:
             self.capture.release()
             self.capture = None
+        
         self.startCamButton.setEnabled(True)
         self.stopCamButton.setEnabled(False)
         self.textEdit.setText("Camera stopped.")
