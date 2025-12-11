@@ -193,7 +193,7 @@ class TextScannerApp(QMainWindow):
         h = max(1, min(h, img_h - y))
 
         self.roi = (x, y, w, h)
-        self.textEdit.setText(f"✓ ROI set: x={x}, y={y}, w={w}, h={h}")
+        self.textEdit.setText(f"✓ ROI set: x={x}, y={y}, w={w}, h={h}\n\nClick 'Run OCR' to scan this region.")
 
     def runOCR(self):
         """Run OCR on image or ROI"""
@@ -211,8 +211,10 @@ class TextScannerApp(QMainWindow):
         if self.roi:
             x, y, w, h = self.roi
             crop = frame[y:y+h, x:x+w]
+            crop_offset = (x, y)  # Track offset for overlay mapping
         else:
             crop = frame
+            crop_offset = (0, 0)
 
         # Preprocessing
         gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
@@ -220,57 +222,68 @@ class TextScannerApp(QMainWindow):
 
         # Extract text
         text = pytesseract.image_to_string(gray)
-        self.textEdit.setText(text.strip() if text.strip() else "No text found.")
+        extracted = text.strip() if text.strip() else "No text found."
+        self.textEdit.setText(extracted)
 
         # Get bounding boxes for overlay
-        data = pytesseract.image_to_data(gray, output_type=pytesseract.Output.DICT)
-        boxes = []
+        try:
+            data = pytesseract.image_to_data(gray, output_type=pytesseract.Output.DICT)
+            boxes = []
 
-        for i, conf in enumerate(data['conf']):
-            try:
-                c = float(conf)
-            except (ValueError, TypeError):
-                continue
+            for i, conf in enumerate(data['conf']):
+                try:
+                    c = float(conf)
+                except (ValueError, TypeError):
+                    continue
 
-            if c > 30:  # Confidence threshold
-                x1, y1, w1, h1 = (data['left'][i], data['top'][i], 
-                                  data['width'][i], data['height'][i])
-                txt = data['text'][i].strip()
+                if c > 30:  # Confidence threshold
+                    x1, y1, w1, h1 = (data['left'][i], data['top'][i], 
+                                      data['width'][i], data['height'][i])
+                    txt = data['text'][i].strip()
+                    
+                    if txt:  # Only add non-empty text
+                        # Map back to full image using crop offset
+                        offset_x, offset_y = crop_offset
+                        boxes.append((offset_x + x1, offset_y + y1, w1, h1, txt))
+
+            # Show overlayed result on full frame
+            full = self.cv_frame.copy() if self.cv_frame is not None else cv2.imread(self.image_path)
+            if full is not None and boxes:
+                self._show_frame(full, overlay_boxes=boxes)
+            elif full is not None:
+                self._show_frame(full)
                 
-                if txt:  # Only add non-empty text
-                    # Map back to full image if ROI was used
-                    if self.roi:
-                        rx, ry, _, _ = self.roi
-                        boxes.append((rx + x1, ry + y1, w1, h1, txt))
-                    else:
-                        boxes.append((x1, y1, w1, h1, txt))
-
-        # Show overlayed result
-        full = self.cv_frame.copy() if self.cv_frame is not None else cv2.imread(self.image_path)
-        if full is not None:
-            self._show_frame(full, overlay_boxes=boxes)
+        except Exception as e:
+            print(f"Overlay error: {e}")
+            # Still show the text even if overlay fails
+            pass
 
     # ======================== CAMERA FUNCTIONS ========================
 
-    def start_camera(self, cam_index=1):
+    def start_camera(self, cam_index=0):
         """Start live camera capture"""
         try:
             if self.capture is None:
-                # Use correct VideoCapture syntax for OpenCV 4.x
-                self.capture = cv2.VideoCapture(cam_index)
-                # Set camera properties
-                self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-                self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-                self.capture.set(cv2.CAP_PROP_FPS, 30)
+                # Try multiple camera indices if default fails
+                for idx in [0, 1, -1]:
+                    self.capture = cv2.VideoCapture(idx)
+                    if self.capture.isOpened():
+                        break
+                    self.capture = None
 
-            if not self.capture.isOpened():
-                self.textEdit.setText("Error: Cannot open camera. Check device.")
+            if self.capture is None or not self.capture.isOpened():
+                self.textEdit.setText("Error: Cannot open camera. Try a different device.")
                 return
+
+            # Set camera properties
+            self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+            self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+            self.capture.set(cv2.CAP_PROP_FPS, 30)
 
             self.startCamButton.setEnabled(False)
             self.stopCamButton.setEnabled(True)
             self.timer.start(30)  # Update every 30ms (~33 FPS)
-            self.textEdit.setText("Camera started. Press 'Run OCR' to scan current frame.")
+            self.textEdit.setText("✓ Camera started. Press 'Run OCR' to scan current frame.")
             
         except Exception as e:
             self.textEdit.setText(f"Camera error: {str(e)}")
